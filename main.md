@@ -8,6 +8,8 @@ after:  [0, 0.33, 0.67, 1]
 using the math = (x - min) / (max - min)
 ```
 
+Basically, normalizing means rescaling its magnitude to 1. In neuralnetworks we want to rescaling using mean and variance. In other cases, like L2 normalization we use the norm to rescaling the values of magnitude.
+
 # 2. Why it's necessary
 
 We know that in the backpropagation algorithm, one of the central components is the calculation of the gradient of the Loss with respect to each weight in the network, via the chain rule. For a simple linear layer (y = W·x + b), the derivative of the Loss with respect to the weight W depends directly on the input to that layer:
