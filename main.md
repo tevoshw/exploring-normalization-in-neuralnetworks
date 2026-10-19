@@ -1,80 +1,102 @@
-# 1. What is Normalization
+# Normalization in Neural Networks
 
-Normalization is the process of transforming values into a different scale (typically with controlled mean and/or variance), while preserving the relative relationships between them — that is, the order and proportions of the data are maintained, only the numerical representation changes.
+## 1. What is Normalization
+
+Normalization transforms values into a different scale (typically with a controlled mean and/or variance) while preserving the relative relationships between them: the order and proportions are maintained, and only the numerical representation changes.
 
 ```
 before: [1, 2, 3, 4]
-after:  [0, 0.33, 0.67, 1] 
-using the math = (x - min) / (max - min)
+after:  [0, 0.33, 0.67, 1]    (min-max scaling)
 ```
 
-# 2. Why it's necessary
+## 2. Why it is necessary
 
-We know that in the backpropagation algorithm, one of the central components is the calculation of the gradient of the Loss with respect to each weight in the network, via the chain rule. For a simple linear layer (y = W·x + b), the derivative of the Loss with respect to the weight W depends directly on the input to that layer:
+### 2.1 Numerical stability
 
-```
-∂L/∂W = ∂L/∂y · x
-```
+Computers store numbers with finite precision. In float16, the largest representable value is 65,504. If a layer produces a larger value, it overflows to `inf`, which quickly turns into `NaN` and breaks the training. At the other extreme, tiny values (such as 10⁻¹⁰) underflow to 0 and the information is lost. Controlling the scale of activations keeps the arithmetic inside the representable range. (bfloat16 has the same range as float32, but much lower precision, so scale control still matters there.)
 
-In other words, the magnitude of the gradient is proportional to the magnitude of the input x (which, in a deep network, is the output of the previous layer).
+### 2.2 Saturation of non-linearities
 
-What happens if this input consists of very large values? The resulting gradient will also be very large. In a deep network, this effect accumulates: by the chain rule, the gradient that reaches an early layer is the product of many terms spanning all the subsequent layers:
+Functions like sigmoid and softmax saturate when their inputs are large in magnitude: the output flattens (softmax becomes almost one-hot) and the gradient goes to nearly zero, which causes vanishing gradients. Keeping the inputs in a moderate range keeps these functions in their useful region.
 
-```
-∂L/∂x_1 = ∂L/∂x_L · (∂x_L/∂x_{L-1}) · (∂x_{L-1}/∂x_{L-2}) · ... · (∂x_2/∂x_1)
-```
+### 2.3 Backpropagation
 
-If these terms are consistently greater than 1, the product grows exponentially with depth — this is gradient explosion. This makes training unstable and prevents the network from converging.
+In backpropagation, the gradient of the loss with respect to each weight is computed with the chain rule. For a linear layer $y = Wx + b$:
 
-The opposite is also a problem: if these terms are consistently smaller than 1, the product shrinks exponentially with depth, causing vanishing gradients, where the network practically stops learning in the earlier layers.
+$$\frac{\partial L}{\partial W} = \frac{\partial L}{\partial y} \cdot x^\top$$
 
-For this reason, controlling the scale of outputs between layers — through normalization — is essential to keep training stable.
+The magnitude of the gradient is proportional to the magnitude of the input $x$ (which, in a deep network, is the output of the previous layer). Very large inputs therefore produce very large gradients.
 
-# 3. How it works
+In a deep network this effect accumulates. The gradient that reaches an early layer is a product of many terms, one for each subsequent layer:
 
-Normalization works by rescaling the output values of a layer, using statistics such as mean and variance (in the case of z-score/LayerNorm/BatchNorm) or min/max (in the case of min-max scaling), applying a transformation that preserves the relative structure of the data while controlling its scale.
+$$\frac{\partial L}{\partial x_1} = \frac{\partial L}{\partial x_L} \cdot \frac{\partial x_L}{\partial x_{L-1}} \cdot \frac{\partial x_{L-1}}{\partial x_{L-2}} \cdots \frac{\partial x_2}{\partial x_1}$$
 
-In the context of neural networks, it usually includes learnable parameters (γ and β in LayerNorm, for example) that allow the network to adjust or even partially undo the normalization, if that turns out to be useful for the task.
+- If these terms are consistently **greater than 1**, the product grows exponentially with depth (**exploding gradients**). Training becomes unstable and fails to converge.
+- If they are consistently **smaller than 1**, the product shrinks exponentially with depth (**vanishing gradients**), and the early layers practically stop learning.
 
-# 4. Where do we find it?
+### Summary
 
-The position of normalization within a layer is not a fixed rule — different conventions exist:
+Normalization **helps** with vanishing and exploding gradients and stabilizes training, but it is **not a complete solution** on its own. Initialization, residual connections and learning-rate schedules also matter.
 
-- **Before the activation**: the original BatchNorm proposal (Linear → BatchNorm → ReLU), which controls the scale of the values entering the non-linearity.
-- **After the activation**: also used in practice, with mixed empirical results depending on the architecture.
-- **In Transformers**: normalization (LayerNorm) is applied relative to the attention and feed-forward sub-layers. Here, the exact position gives rise to two well-known variants:
-  - **Post-LN** (original "Attention is All You Need" paper): `LayerNorm(x + Sublayer(x))` — normalizes after the residual sum.
-  - **Pre-LN** (used in most modern models, such as GPT): `x + Sublayer(LayerNorm(x))` — normalizes the input before it passes through the sub-layer, which brings more stability in very deep networks.
+## 3. How it works
 
-In other words: normalization always exists at some point in the flow between layers, but "exactly where" is a design decision that affects training stability, not a universal rule.
+Normalization rescales the output of a layer using statistics of the data:
 
-## A concrete argument for normalizing before the activation
+- **Min-max scaling**: uses the minimum and maximum values.
+- **Z-score / LayerNorm / BatchNorm**: uses the mean $\mu$ and variance $\sigma^2$:
 
-ReLU creates intentional sparsity: zeroing a neuron is an explicit decision that it doesn't contribute for that input (`ReLU(x) = max(0, x)`). If normalization is applied **after** the activation, z-score normalization can reintroduce non-zero values exactly where ReLU had decided to "turn off" a neuron — partially undoing that sparsity.
+$$\text{LayerNorm}(x) = \gamma \cdot \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} + \beta$$
 
-Example: take the post-ReLU output `[0, 0, 0, 1]` and apply z-score normalization to it.
+- **RMSNorm**: skips the mean subtraction and divides only by the root mean square. It is cheaper and works just as well in practice, so most modern LLMs use it:
 
-```
-μ = (0+0+0+1)/4 = 0.25
-σ ≈ 0.433
+$$\text{RMSNorm}(x) = \gamma \cdot \frac{x}{\sqrt{\frac{1}{d}\sum_i x_i^2 + \epsilon}}$$
 
-z-score:
-0 → (0 - 0.25) / 0.433 ≈ -0.577
-0 → -0.577
-0 → -0.577
-1 → (1 - 0.25) / 0.433 ≈  1.732
+In neural networks, the transformation includes learnable parameters ($\gamma$, and $\beta$ in LayerNorm). They let the network adjust, or even partially undo, the normalization if that is useful for the task.
 
-result: [-0.577, -0.577, -0.577, 1.732]
-```
+In transformers, the statistics are computed **per token, across the feature dimension**, so the result does not depend on batch size or on other tokens.
 
-In this case the zeros stayed negative, so a subsequent ReLU would still kill them. But whether a zero turns positive or negative after z-score depends entirely on the mean of the group. If the surrounding values are different, the same kind of input can flip sign:
+## 4. Problems of normalization
 
-```
-[0, 0, -5, -3] → μ = -2, σ ≈ 2.29
+Normalization gives better control of scale, but it has costs:
 
-z-score of 0: (0 - (-2)) / 2.29 ≈ 0.87   ← now positive!
-```
+- **Computational cost**: normalization layers are memory-bound operations (they read and write the whole activation tensor), so stacking many of them slows down training and inference. Kernel fusion mitigates this.
+- **Loss of information**: normalizing each token discards its overall magnitude. If the magnitude carries useful information, it is lost. The learnable $\gamma$ restores a per-channel scale, but not the per-token magnitude.
+- **Wrong placement**: placing the normalization in the wrong position can make training harder (see the next section).
 
-So a value that ReLU explicitly zeroed out can come back as positive after normalization, effectively "reviving" a neuron the activation had turned off. This is one of the practical arguments in favor of normalizing **before** the activation: it keeps ReLU's categorical decision (on/off) intact for that layer, instead of letting a later normalization step reinterpret zeros relative to the rest of the batch.
+## 5. Normalization in Transformers
 
-This doesn't break training — the network's weights are optimized end-to-end considering the full pipeline (linear → normalization → activation), so it learns to work within whichever order is used. But it is a real trade-off, not just a theoretical curiosity, and it's part of why "before the activation" remains the more common default.
+The transformer is the most common place where normalization is used, and the **position** of the norm changes how the gradient flows. For a block with input $x$, sublayer $f$ (attention or MLP) and output $y$, what matters is the Jacobian $\frac{\partial y}{\partial x}$, which is a product of the Jacobians of the norm and of $f$ (chain rule).
+
+### Post-LN (original transformer)
+
+$$y = \text{norm}(x + f(x))$$
+
+$$\frac{\partial y}{\partial x} = J_{norm} \cdot (I + J_f)$$
+
+The norm sits on the residual path, so the gradient must cross a normalization at every layer. There is no clean identity path, and the gradient can become unstable in deep models. In practice, it requires careful learning-rate warmup.
+
+### Pre-LN
+
+$$y = x + f(\text{norm}(x))$$
+
+$$\frac{\partial y}{\partial x} = I + J_f \cdot J_{norm}$$
+
+The residual path stays untouched, so the identity term $I$ gives the gradient a direct route to earlier layers. This makes training much more stable and is the most common choice.
+
+### OLMo 2
+
+$$y = x + \text{norm}(f(x))$$
+
+$$Q, K = \text{norm}(Q), \text{norm}(K)$$
+
+$$\frac{\partial y}{\partial x} = I + J_{norm} \cdot J_f$$
+
+The norm is applied to the **output** of the sublayer, and the residual path stays clean. It also uses **QK-norm**: Q and K are normalized (separately) before the attention scores, which prevents the attention logits from growing too large and saturating the softmax. OLMo uses RMSNorm.
+
+### Gemma (2 and 3)
+
+$$y = x + \text{norm}_2(f(\text{norm}_1(x)))$$
+
+$$\frac{\partial y}{\partial x} = I + J_{norm_2} \cdot J_f \cdot J_{norm_1}$$
+
+It normalizes both the input and the output of each sublayer, and the residual path stays clean. Gemma 3 also uses QK-norm. Gemma uses RMSNorm.
