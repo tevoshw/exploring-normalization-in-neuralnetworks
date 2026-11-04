@@ -9,7 +9,13 @@ before: [1, 2, 3, 4]
 after:  [0, 0.33, 0.67, 1]    (min-max scaling)
 ```
 
+<<<<<<< HEAD
 ## 2. Why it is necessary
+=======
+Basically, normalizing means rescaling its magnitude to 1. In neuralnetworks we want to rescaling using mean and variance. In other cases, like L2 normalization we use the norm to rescaling the values of magnitude.
+
+# 2. Why it's necessary
+>>>>>>> 72838f21afa0d5c807ba16a0e7731b9732087c42
 
 ### 2.1 Numerical stability
 
